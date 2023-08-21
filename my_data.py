@@ -8,8 +8,8 @@ class MyData:
     def __init__(self):
         self._token = config.BOT_TOKEN
         self._admin_id = config.ADMIN_ID
-        self._list_paired = {}
-        self._list_users = []
+        self._list_paired = {}  # This dictionary will contain the couples, with the host as key and the guest as value
+        self._list_users = {}  # This list will contain all the users that are currently active and their status
 
     @property
     def token(self):
@@ -42,7 +42,7 @@ class MyData:
         :return: a boolean value, True if the user is added, False if not because he/she is already present
         """
         if user_id not in self._list_users:
-            self._list_users.append(user_id)
+            self._list_users[user_id] = None
             return True
         else:
             return False
@@ -54,22 +54,26 @@ class MyData:
         :return: a boolean value, True if the user is removed, False if not because he/she is not present
         """
         if user_id in self._list_users:
-            self._list_users.remove(user_id)
+            del self._list_users[user_id]
             return True
         else:
             return False
 
-    def remove_paired_user(self, user_id):
+    def remove_paired_users(self, user_id, partner_id):
         """
-        Removes a user from the list of paired users
+        Removes a user and its partner from the list of paired users
         :param user_id: id of the user to remove
+        :param partner_id: id of the partner to remove
         :return: None
         """
-        del self._list_paired[user_id]
+        try:
+            del self._list_paired[user_id]
+        except KeyError:
+            del self._list_paired[partner_id]
 
     def return_list_users(self, user_id):
         """
-        Returns the list of all the users, only to the admin
+        Returns the list of all the users, only to the admin or a function that needs it
         :return: list of all the users
         """
         if user_id == self._admin_id:
@@ -131,22 +135,66 @@ class MyData:
         else:
             return None
 
-    def couple(self, current_user_id, context):
+    def couple(self, current_user_id):
         """
         Couples a user with another one who is also in search, if present
         :param current_user_id: id of the user to couple
-        :param context: context of the message
         :return: the id of the coupled user, None if not found
         """
-        for other_user_id in self._list_users:
+        for other_user_id in self._list_users.keys():
             # If the user is not the current one and is in search, then couple them
-            if self.get_user_status(context, user_id=other_user_id) == "in_search" and other_user_id != current_user_id:
+            if self.get_user_status(user_id=other_user_id) == Status.IN_SEARCH and other_user_id != current_user_id:
                 # The current user will be the host (coupling user), while the other one the guest (coupled user)
                 self.set_partner_of(host_user_id=current_user_id, guest_user_id=other_user_id)
 
                 return other_user_id
         return None
 
-    @staticmethod
-    def get_user_status(context, user_id):
-        return context.bot_data.get(str(user_id) + '_status', None)
+    def get_user_status(self, user_id):
+        """
+        Returns the status of a user
+        :param user_id: id of the user to get the status of
+        :return: the status of the user
+        """
+        # Get the status of the user, by looking at the dictionary of the active users
+        status = self._list_users.get(user_id, None)
+        return status
+
+    def set_user_status(self, user_id, new_status):
+        """
+        Sets the status of a user
+        :param user_id: id of the user to set the status of
+        :param new_status: new status to set
+        :return: None
+        """
+        if new_status not in Status.possible_states:
+            logging.warning("The status " + new_status + "for the user: " + user_id + " is not a valid one")
+            raise ValueError("The status is not a valid one")
+        else:
+            self._list_users[user_id] = new_status
+            return
+
+
+class Status:
+    COUPLED = "coupled"
+    IDLE = "idle"
+    IN_SEARCH = "in_search"
+    PARTNER_LEFT = "partner_left"
+
+    possible_states = [COUPLED, IDLE, IN_SEARCH, PARTNER_LEFT]
+
+    @classmethod
+    def is_coupled(cls, status):
+        return status == cls.COUPLED
+
+    @classmethod
+    def is_in_idle(cls, status):
+        return status == cls.IDLE
+
+    @classmethod
+    def is_in_search(cls, status):
+        return status == cls.IN_SEARCH
+
+    @classmethod
+    def is_partner_left(cls, status):
+        return status == cls.PARTNER_LEFT
