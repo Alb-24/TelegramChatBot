@@ -1,6 +1,6 @@
-# Telegram ChatBot ⚠️ ***Work in Progress!*** ⚠️
+# Telegram Anonymous ChatBot
 
-Welcome to ChatBot, a Telegram bot that connects users for random anonymous chats!
+Welcome to this example of ChatBot, a Telegram bot that connects users for random anonymous chats!
 
 ## Table of Contents
 
@@ -57,10 +57,10 @@ All of this is made possible thanks to this interface for the Telegram Bot API  
 These are the supported commands, for now:
 
     /start - 🤖 Starts the bot
-    /cerca -  💬 Start searching for a partner
+    /chat -  💬 Start searching for a partner
     /exit - 🔚 Exit from the chat
     /newchat - ⏭ Exit from the chat and open a new one
-    /stats - Display the number of active and paired users, only to admins
+    /stats - 📊 Show bot statistics (only for admin)
 
 ### Contributing
 
