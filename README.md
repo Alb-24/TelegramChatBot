@@ -19,7 +19,7 @@ This project was born out of my curiosity to understand how a generic ChatBot wo
 All of this is made possible thanks to this interface for the Telegram Bot API  [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot).
 
 ## Features
-
+- **NEW**! Scalable approach with sqlite3 database to handle users pairs and chat statistics (Improvements are always possible!).
 - Randomly pairs users for one-on-one chats.
 - Ensures anonymity between users.
 - Offers an easy-to-use Telegram interface.
@@ -32,7 +32,7 @@ All of this is made possible thanks to this interface for the Telegram Bot API  
 
 - Python (3.8 or higher)
 - Telegram Bot API token (obtain it from @BotFather on Telegram, see [here](https://core.telegram.org/bots/tutorial#obtain-your-bot-token))
-- [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) installed (see [here](https://github.com/python-telegram-bot/python-telegram-bot#installing))
+- [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) library installed (see [here](https://github.com/python-telegram-bot/python-telegram-bot#installing))
 
 ### Installation
 
@@ -47,7 +47,8 @@ All of this is made possible thanks to this interface for the Telegram Bot API  
     BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
     ADMIN_ID = "YOUR_ADMIN_USER_ID"
     
-3. Make any modifications you desire to bot.py and my_data.py (feel free to explore possible improvements!)
+3. Make any modifications you desire to bot.py and UserStatus.py. 
+   For example, you can change the welcome message, add new commands or User status. 
 4. Run bot.py and have fun with your bot:
    ```bash
    python bot.py

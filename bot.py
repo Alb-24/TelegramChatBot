@@ -1,11 +1,14 @@
 import logging
-from telegram import Update
-from telegram.ext import filters, ApplicationBuilder, ContextTypes, CommandHandler, ConversationHandler, MessageHandler
-from my_data import MyData, Status
+from telegram import Update, ChatMember
+from telegram.ext import (filters, ApplicationBuilder, ContextTypes, CommandHandler, ConversationHandler,
+                          MessageHandler, ChatMemberHandler)
+from UserStatus import UserStatus
+from config import BOT_TOKEN, ADMIN_ID
+import db_connection
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.WARNING  # Set the logging level to: (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 )
 
 """
@@ -28,9 +31,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text="Welcome to this ChatBot! 🤖\nType /chat to start searching for a partner")
 
-    if my_data.get_user_status(user_id=update.effective_chat.id) is None:
-        my_data.set_user_status(user_id=update.effective_user.id, new_status=Status.IDLE)
-        my_data.add_user(user_id=update.effective_user.id)
+    # Insert the user into the database, if not already present (check is done in the function)
+    user_id = update.effective_user.id
+    db_connection.insert_user(user_id)
 
     return USER_ACTION
 
@@ -42,10 +45,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     :param context: context of the bot
     :return: None
     """
-
-    if my_data.get_user_status(user_id=update.effective_user.id) == Status.COUPLED:
-        # check if the user was paired by another one; if so, retrieve him/her
-        other_user_id = my_data.search_partner_of(update.effective_user.id)
+    user_id = update.effective_user.id
+    # Check if the user is in chat
+    if db_connection.get_user_status(user_id=user_id) == UserStatus.COUPLED:
+        # User is in chat, retrieve the other user
+        other_user_id = db_connection.get_partner_id(user_id)
         if other_user_id is None:
             return await handle_not_in_chat(update, context)
         else:
@@ -62,28 +66,30 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     :return: None
     """
     # Handle the command /chat in different cases, based on the status of the user
-    current_user = update.effective_user.id
-    if my_data.get_user_status(user_id=current_user) == Status.PARTNER_LEFT:
+    current_user_id = update.effective_user.id
+    current_user_status = db_connection.get_user_status(user_id=current_user_id)
+
+    if current_user_status == UserStatus.PARTNER_LEFT:
         # First, check if the user has been left by his/her partner (he/she would have updated this user's status to
         # PARTNER_LEFT)
-        my_data.set_user_status(user_id=current_user, new_status=Status.IDLE)
+        db_connection.set_user_status(user_id=current_user_id, new_status=UserStatus.IDLE)
 
         return await start_search(update, context)
-    elif my_data.get_user_status(user_id=current_user) == Status.IN_SEARCH:
+    elif current_user_status == UserStatus.IN_SEARCH:
         # Warn him/her that he/she is already in search
         return await handle_already_in_search(update, context)
-    # If the status is not IN_SEARCH or PARTNER_LEFT, then the user is either IDLE or COUPLED, so check if he/she has
-    # a partner
-    other_user = my_data.search_partner_of(current_user)
-
-    if other_user is not None:
-        # If the user has been paired, then he/she is already in a chat, so warn him/her
-        await context.bot.send_message(chat_id=current_user,
-                                       text="🤖 You are already in a chat, type /exit to exit from the chat.")
-        return None
-
-    else:
-        # Else, the user is in IDLE status, so simply start the search
+    elif current_user_status == UserStatus.COUPLED:
+        # Double check if the user is in chat
+        other_user = db_connection.get_partner_id(current_user_id)
+        if other_user is not None:
+            # If the user has been paired, then he/she is already in a chat, so warn him/her
+            await context.bot.send_message(chat_id=current_user_id,
+                                           text="🤖 You are already in a chat, type /exit to exit from the chat.")
+            return None
+        else:
+            return await start_search(update, context)
+    elif current_user_status == UserStatus.IDLE:
+        # The user is in IDLE status, so simply start the search
         return await start_search(update, context)
 
 
@@ -94,13 +100,15 @@ async def handle_not_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE)
     :param context: context of the bot
     :return: None
     """
-    current_user = update.effective_user.id
-    if my_data.get_user_status(user_id=current_user) in [Status.IDLE, Status.PARTNER_LEFT]:
-        await context.bot.send_message(chat_id=current_user,
+    current_user_id = update.effective_user.id
+    current_user_status = db_connection.get_user_status(user_id=current_user_id)
+
+    if current_user_status in [UserStatus.IDLE, UserStatus.PARTNER_LEFT]:
+        await context.bot.send_message(chat_id=current_user_id,
                                        text="🤖 You are not in a chat, type /chat to start searching for a partner.")
         return
-    elif my_data.get_user_status(user_id=current_user) == Status.IN_SEARCH:
-        await context.bot.send_message(chat_id=current_user,
+    elif current_user_status == UserStatus.IN_SEARCH:
+        await context.bot.send_message(chat_id=current_user_id,
                                        text="🤖 Message not delivered, you are still in search!")
         return
 
@@ -123,43 +131,20 @@ async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     :param context: context of the bot
     :return: None
     """
-    current_user = update.effective_user.id
-    my_data.set_user_status(user_id=current_user, new_status=Status.IN_SEARCH)
+    current_user_id = update.effective_chat.id
 
-    await context.bot.send_message(chat_id=current_user, text="🤖 Searching for a partner...")
-    user_id = update.effective_chat.id
-    logging.info("User %d started a search", user_id)
+    # Set the user status to in_search
+    db_connection.set_user_status(user_id=current_user_id, new_status=UserStatus.IN_SEARCH)
+    await context.bot.send_message(chat_id=current_user_id, text="🤖 Searching for a partner...")
 
-    if await retrieve_coupling_partner(update, context):
-        # If the user has been paired, then simply return
-        return
-    else:
-        logging.info("User: " + str(current_user) + " NOT PAIRED, no other partner in search")
-        return
+    # Search for a partner
+    other_user_id = db_connection.couple(current_user_id=current_user_id)
+    # If a partner is found, notify both the users
+    if other_user_id is not None:
+        await context.bot.send_message(chat_id=current_user_id, text="🤖 You have been paired with an user")
+        await context.bot.send_message(chat_id=other_user_id, text="🤖 You have been paired with an user")
 
-
-async def retrieve_coupling_partner(update, context) -> bool:
-    """
-    Retrieves the coupling partner for the current_user, if any
-    :param update: update received from the user
-    :param context: context of the bot
-    :return: Boolean value, True if the user has been paired, False otherwise
-    """
-    current_user = update.effective_chat.id
-
-    user_id = my_data.couple(current_user_id=current_user)
-
-    if user_id is not None:
-        # Send the message to both the users
-        await context.bot.send_message(chat_id=current_user, text="🤖 You have been paired with an user")
-        await context.bot.send_message(chat_id=user_id, text="🤖 You have been paired with an user")
-        # Update their status to coupled
-        my_data.set_user_status(user_id=current_user, new_status=Status.COUPLED)
-        my_data.set_user_status(user_id=user_id, new_status=Status.COUPLED)
-
-        return True
-    else:
-        return False
+    return
 
 
 async def handle_exit_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -180,11 +165,21 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     :param context: context of the bot
     :return: None
     """
-    await my_data.stats(context=context, user_id=update.effective_user.id)
+    user_id = update.effective_user.id
+    if user_id == ADMIN_ID:
+        total_users_number, paired_users_number = db_connection.retrieve_users_number()
+        await context.bot.send_message(chat_id=user_id, text="Welcome to the admin panel")
+        await context.bot.send_message(chat_id=user_id,
+                                       text="Number of paired users: " + str(paired_users_number))
+        await context.bot.send_message(chat_id=user_id,
+                                       text="Number of active users: " + str(total_users_number))
+    else:
+
+        logging.warning("User " + str(user_id) + " tried to access the admin panel")
     return
 
 
-async def exit_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def exit_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Exits from the chat, sending a message to the other user and updating the status of both the users
     :param update: update received from the user
@@ -192,13 +187,16 @@ async def exit_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     :return: a boolean value, True if the user was in chat (and so exited), False otherwise
     """
     current_user = update.effective_user.id
-    if my_data.get_user_status(user_id=current_user) != Status.COUPLED:
+    if db_connection.get_user_status(user_id=current_user) != UserStatus.COUPLED:
         await context.bot.send_message(chat_id=current_user, text="🤖 You are not in a chat!")
-        return False
+        return
 
-    other_user = my_data.search_partner_of(current_user)
+    other_user = db_connection.get_partner_id(current_user)
     if other_user is None:
-        return False
+        return
+
+    # Perform the uncoupling
+    db_connection.uncouple(user_id=current_user)
 
     await context.bot.send_message(chat_id=current_user, text="🤖 Ending chat...")
     await context.bot.send_message(chat_id=other_user,
@@ -206,12 +204,7 @@ async def exit_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
                                         "partner.")
     await update.message.reply_text("🤖 You have left the chat.")
 
-    my_data.set_user_status(user_id=current_user, new_status=Status.IDLE)
-    my_data.set_user_status(user_id=other_user, new_status=Status.PARTNER_LEFT)
-
-    my_data.remove_paired_users(user_id=current_user, partner_id=other_user)
-
-    return True
+    return
 
 
 async def exit_then_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -222,11 +215,10 @@ async def exit_then_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     :return: None
     """
     current_user = update.effective_user.id
-    if my_data.get_user_status(user_id=current_user) == Status.IN_SEARCH:
+    if db_connection.get_user_status(user_id=current_user) == UserStatus.IN_SEARCH:
         return await handle_already_in_search(update, context)
     # If exit_chat returns True, then the user was in chat and successfully exited
-    if await exit_chat(update, context):
-        logging.info("User: " + str(current_user) + " LEFT the chat")
+    await exit_chat(update, context)
     # Either the user was in chat or not, start the search
     return await start_search(update, context)
 
@@ -248,34 +240,69 @@ async def in_chat(update: Update, other_user_id) -> None:
             await update.effective_chat.copy_message(chat_id=other_user_id, message_id=update.message.message_id,
                                                      protect_content=True,
                                                      reply_to_message_id=update.message.reply_to_message.message_id + 1)
-        # Check if the message is a reply to a message sent by the other user that is actual in chat
-        elif update.message.reply_to_message.from_user.id == other_user_id:
-            # The message is a reply to a message sent by the other user, so send the message to the replyed-1
-            # message (the one copied by the bot has id-1)
+
+        # Else, the replied message could be sent either by the other user, another previous user or the bot
+        # Since the bot sends non-protected-content messages, use this as discriminator
+        elif update.message.reply_to_message.has_protected_content is None:
+            # Message is sent by the bot, forward message without replying
+            await update.effective_chat.copy_message(chat_id=other_user_id, message_id=update.message.message_id,
+                                                     protect_content=True)
+
+        else:
+            # The message is a reply to a message sent by another user, forward the message replyed to the replyed -1
+            # message. Other user will see the message as a reply to the message he/she sent, only if he was the sender
             await update.effective_chat.copy_message(chat_id=other_user_id, message_id=update.message.message_id,
                                                      protect_content=True,
                                                      reply_to_message_id=update.message.reply_to_message.message_id - 1)
-        else:
-            # The message is a reply to a message sent by another user, so send the message without replying
-            await update.effective_chat.copy_message(chat_id=other_user_id, message_id=update.message.message_id,
-                                                     protect_content=True)
     else:
         # The message is not a reply to another message, so send the message without replying
-        await update.effective_chat.copy_message(other_user_id, update.message.message_id, protect_content=True)
+        await update.effective_chat.copy_message(chat_id=other_user_id, message_id=update.message.message_id,
+                                                 protect_content=True)
+
     return
 
+
+def is_bot_blocked_by_user(update: Update) -> bool:
+    new_member_status = update.my_chat_member.new_chat_member.status
+    old_member_status = update.my_chat_member.old_chat_member.status
+    if new_member_status == ChatMember.BANNED and old_member_status == ChatMember.MEMBER:
+        return True
+    else:
+        return False
+
+
+async def blocked_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_bot_blocked_by_user(update):
+        # Check if user was in chat
+        user_id = update.effective_user.id
+        user_status = db_connection.get_user_status(user_id=user_id)
+        if user_status == UserStatus.COUPLED:
+            other_user = db_connection.get_partner_id(user_id)
+            db_connection.uncouple(user_id=user_id)
+            await context.bot.send_message(chat_id=other_user, text="🤖 Your partner has left the chat, type /chat to "
+                                                                    "start searching for a new partner.")
+        db_connection.remove_user(user_id=user_id)
+        return ConversationHandler.END
+    else:
+        # Telegram API does not provide a way to check if the bot was unblocked by the user
+        return USER_ACTION
 
 # Define status for the conversation handler
 USER_ACTION = 0
 
 if __name__ == '__main__':
-    my_data = MyData()
-    application = ApplicationBuilder().token(my_data.token).build()
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    # Create the database, if not already present
+    db_connection.create_db()
+
+    # Reset the status of all the previous existent users to IDLE, if the bot is restarted
+    db_connection.reset_users_status()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             USER_ACTION: [
+                ChatMemberHandler(blocked_bot_handler),
                 MessageHandler(
                     (filters.TEXT | filters.ATTACHMENT) & ~ filters.COMMAND & ~filters.Regex("exit") & ~filters.Regex(
                         "chat")
